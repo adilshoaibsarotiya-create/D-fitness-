@@ -1,159 +1,14 @@
-import { createClient, SupabaseClient } from '@supabase/supabase-js';
-
-const rawUrl = (
-  (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_SUPABASE_URL) ||
-  (typeof process !== 'undefined' && process.env && process.env.VITE_SUPABASE_URL) ||
-  ''
-).trim();
-
-// Strip any trailing /rest/v1 or trailing slashes so Supabase JS constructs valid URLs
-const supabaseUrl = rawUrl.replace(/\/rest\/v1\/?$/, '').replace(/\/+$/, '');
-
-const supabaseKey = (
-  (typeof import.meta !== 'undefined' && import.meta.env && (import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY)) ||
-  (typeof process !== 'undefined' && process.env && (process.env.VITE_SUPABASE_PUBLISHABLE_KEY || process.env.VITE_SUPABASE_ANON_KEY)) ||
-  ''
-).trim();
-
-export const isSupabaseConfigured = (): boolean => {
-  return Boolean(
-    supabaseUrl &&
-    supabaseKey &&
-    supabaseUrl.startsWith('http') &&
-    supabaseUrl.includes('supabase.co')
-  );
-};
-
-let clientInstance: SupabaseClient | null = null;
-
-export const getSupabase = (): SupabaseClient | null => {
-  if (!isSupabaseConfigured()) {
-    return null;
-  }
-  if (!clientInstance) {
-    clientInstance = createClient(supabaseUrl, supabaseKey, {
-      auth: {
-        persistSession: true,
-        autoRefreshToken: true,
-        detectSessionInUrl: true,
-      },
-    });
-  }
-  return clientInstance;
-};
-
-// Storage buckets matching prompt requirements
-export const STORAGE_BUCKETS = {
-  GALLERY: 'gym-gallery',
-  TRAINERS: 'trainer-images',
-  TRANSFORMATIONS: 'transformation-images',
-  TESTIMONIALS: 'testimonial-images',
-} as const;
-
-export type StorageBucketKey = (typeof STORAGE_BUCKETS)[keyof typeof STORAGE_BUCKETS];
-
-// Storage upload helper
-export const uploadFileToStorage = async (
-  bucket: string,
-  file: File,
-  folder: string = 'uploads'
-): Promise<{ url: string | null; error: string | null }> => {
-  const client = getSupabase();
-  if (!client) {
-    return { url: null, error: 'Supabase is not configured yet.' };
-  }
-
-  try {
-    const fileExt = file.name.split('.').pop() || 'jpg';
-    const cleanExt = fileExt.toLowerCase().replace(/[^a-z0-9]/g, '');
-    const cleanFolder = folder.replace(/[^a-zA-Z0-9_-]/g, '_');
-    const fileName = `${cleanFolder}/${Date.now()}_${Math.random().toString(36).substring(2, 8)}.${cleanExt}`;
-
-    const { error: uploadError } = await client.storage
-      .from(bucket)
-      .upload(fileName, file, {
-        cacheControl: '3600',
-        upsert: true,
-      });
-
-    if (uploadError) {
-      return { url: null, error: uploadError.message };
-    }
-
-    const { data } = client.storage.from(bucket).getPublicUrl(fileName);
-    return { url: data.publicUrl, error: null };
-  } catch (err: any) {
-    return { url: null, error: err.message || 'Storage upload failed' };
-  }
-};
-
-// Storage deletion helper
-export const deleteFileFromStorage = async (
-  bucket: string,
-  pathOrUrl: string
-): Promise<{ success: boolean; error: string | null }> => {
-  const client = getSupabase();
-  if (!client) {
-    return { success: false, error: 'Supabase is not configured yet.' };
-  }
-
-  try {
-    // Extract relative path inside bucket if full public URL was passed
-    let filePath = pathOrUrl;
-    if (pathOrUrl.includes(`/storage/v1/object/public/${bucket}/`)) {
-      filePath = pathOrUrl.split(`/storage/v1/object/public/${bucket}/`)[1];
-    } else if (pathOrUrl.startsWith('http')) {
-      const parts = pathOrUrl.split(`/${bucket}/`);
-      if (parts.length > 1) {
-        filePath = parts[1];
-      }
-    }
-
-    const { error } = await client.storage.from(bucket).remove([filePath]);
-    if (error) {
-      return { success: false, error: error.message };
-    }
-    return { success: true, error: null };
-  } catch (err: any) {
-    return { success: false, error: err.message || 'Storage delete failed' };
-  }
-};
-
-// List files in bucket
-export const listStorageFiles = async (
-  bucket: string,
-  path: string = ''
-): Promise<{ files: any[]; error: string | null }> => {
-  const client = getSupabase();
-  if (!client) {
-    return { files: [], error: 'Supabase is not configured yet.' };
-  }
-
-  try {
-    const { data, error } = await client.storage.from(bucket).list(path, {
-      limit: 100,
-      offset: 0,
-      sortBy: { column: 'created_at', order: 'desc' },
-    });
-    if (error) {
-      return { files: [], error: error.message };
-    }
-    return { files: data || [], error: null };
-  } catch (err: any) {
-    return { files: [], error: err.message || 'Failed to list bucket files' };
-  }
-};
-
-// Ready-to-copy SQL Schema for the user's Supabase project
-export const SUPABASE_SETUP_SQL = `-- ====================================================================
+-- ====================================================================
 -- D FITNESS GYM: COMPLETE SUPABASE PERMISSIONS & RLS REPAIR MIGRATION
--- Run this in Supabase Dashboard -> SQL Editor -> Run
+-- Run this script in: Supabase Dashboard -> SQL Editor -> Run
 -- ====================================================================
 
 -- 1. Ensure schema usage privileges
 GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
 
--- 2. Admins Table & Helper Authorization Function
+-- --------------------------------------------------------------------
+-- 2. Ensure Admin Table & Helper Authorization Function
+-- --------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS public.admins (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     email TEXT UNIQUE NOT NULL,
@@ -161,14 +16,14 @@ CREATE TABLE IF NOT EXISTS public.admins (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Seed Initial Administrator Accounts
-INSERT INTO public.admins (email, role) 
+-- Seed Administrator Accounts (Add your admin email here if different)
+INSERT INTO public.admins (email, role)
 VALUES 
   ('admin@dfitness.com', 'super_admin'),
   ('adilshoaibsarotiya@gmail.com', 'super_admin')
 ON CONFLICT (email) DO NOTHING;
 
--- Create secure is_admin helper function
+-- Create secure SECURITY DEFINER function to check if current user is an admin
 CREATE OR REPLACE FUNCTION public.is_admin()
 RETURNS BOOLEAN
 LANGUAGE plpgsql
@@ -179,12 +34,14 @@ AS $$
 DECLARE
   curr_email TEXT;
 BEGIN
+  -- Must be an authenticated user in Supabase Auth
   IF auth.role() <> 'authenticated' THEN
     RETURN FALSE;
   END IF;
 
   curr_email := LOWER(COALESCE(auth.jwt() ->> 'email', ''));
 
+  -- 1. Check if user email or UUID exists in public.admins
   IF EXISTS (
     SELECT 1 FROM public.admins
     WHERE LOWER(admins.email) = curr_email
@@ -193,15 +50,18 @@ BEGIN
     RETURN TRUE;
   END IF;
 
+  -- 2. Check user_metadata or app_metadata role in JWT
   IF (auth.jwt() -> 'app_metadata' ->> 'role') IN ('admin', 'super_admin')
      OR (auth.jwt() -> 'user_metadata' ->> 'role') IN ('admin', 'super_admin') THEN
     RETURN TRUE;
   END IF;
 
+  -- 3. Predefined administrator emails fallback
   IF curr_email IN ('admin@dfitness.com', 'adilshoaibsarotiya@gmail.com') THEN
     RETURN TRUE;
   END IF;
 
+  -- 4. If public.admins has zero rows, allow initial authenticated user bootstrap
   IF NOT EXISTS (SELECT 1 FROM public.admins) THEN
     RETURN TRUE;
   END IF;
@@ -210,9 +70,14 @@ BEGIN
 END;
 $$;
 
+-- Grant execution on helper function
 GRANT EXECUTE ON FUNCTION public.is_admin() TO anon, authenticated, service_role;
 
--- 3. Core Content Tables
+-- --------------------------------------------------------------------
+-- 3. Ensure All Core Managed Tables Exist with Correct Columns
+-- --------------------------------------------------------------------
+
+-- MEMBERSHIPS TABLE
 CREATE TABLE IF NOT EXISTS public.memberships (
     id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
     name TEXT NOT NULL,
@@ -229,6 +94,7 @@ CREATE TABLE IF NOT EXISTS public.memberships (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Ensure all expected columns exist if table was created previously
 ALTER TABLE public.memberships ADD COLUMN IF NOT EXISTS duration TEXT DEFAULT '1 Month';
 ALTER TABLE public.memberships ADD COLUMN IF NOT EXISTS duration_days INT DEFAULT 30;
 ALTER TABLE public.memberships ADD COLUMN IF NOT EXISTS description TEXT;
@@ -239,6 +105,7 @@ ALTER TABLE public.memberships ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAUL
 ALTER TABLE public.memberships ADD COLUMN IF NOT EXISTS sort_order INT DEFAULT 1;
 ALTER TABLE public.memberships ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
 
+-- Also support membership_plans table if present
 CREATE TABLE IF NOT EXISTS public.membership_plans (
     id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
     name TEXT NOT NULL,
@@ -258,6 +125,7 @@ CREATE TABLE IF NOT EXISTS public.membership_plans (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- PROGRAMS TABLE
 CREATE TABLE IF NOT EXISTS public.programs (
     id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
     slug TEXT,
@@ -277,6 +145,7 @@ CREATE TABLE IF NOT EXISTS public.programs (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- TRAINERS TABLE
 CREATE TABLE IF NOT EXISTS public.trainers (
     id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
     name TEXT NOT NULL,
@@ -292,6 +161,7 @@ CREATE TABLE IF NOT EXISTS public.trainers (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- BOOKINGS & TRAINER_BOOKINGS TABLES
 CREATE TABLE IF NOT EXISTS public.trainer_bookings (
     id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
     name TEXT NOT NULL,
@@ -325,6 +195,7 @@ CREATE TABLE IF NOT EXISTS public.bookings (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- CONTACTS & CONTACT_MESSAGES TABLES
 CREATE TABLE IF NOT EXISTS public.contacts (
     id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
     name TEXT NOT NULL,
@@ -347,6 +218,7 @@ CREATE TABLE IF NOT EXISTS public.contact_messages (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- LEADS & MEMBERSHIP_LEADS TABLES
 CREATE TABLE IF NOT EXISTS public.leads (
     id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
     name TEXT NOT NULL,
@@ -373,6 +245,7 @@ CREATE TABLE IF NOT EXISTS public.membership_leads (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- GALLERY, TRANSFORMATIONS, TESTIMONIALS, FAQS, SITE_SETTINGS
 CREATE TABLE IF NOT EXISTS public.gallery (
     id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
     title TEXT NOT NULL,
@@ -435,7 +308,10 @@ CREATE TABLE IF NOT EXISTS public.site_settings (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 4. Explicit Table Grants
+-- --------------------------------------------------------------------
+-- 4. Explicit Table Permissions (GRANT) - Solves "permission denied"
+-- --------------------------------------------------------------------
+-- Authenticated role (logged in admins) gets full CRUD on all tables:
 GRANT ALL ON TABLE public.memberships TO authenticated;
 GRANT ALL ON TABLE public.membership_plans TO authenticated;
 GRANT ALL ON TABLE public.programs TO authenticated;
@@ -453,8 +329,11 @@ GRANT ALL ON TABLE public.faqs TO authenticated;
 GRANT ALL ON TABLE public.site_settings TO authenticated;
 GRANT ALL ON TABLE public.admins TO authenticated;
 
+-- Grant sequence privileges to prevent serial ID generation errors
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO authenticated, anon;
 
+-- Anon role (public website visitors):
+-- READ-ONLY for website content:
 GRANT SELECT ON TABLE public.memberships TO anon;
 GRANT SELECT ON TABLE public.membership_plans TO anon;
 GRANT SELECT ON TABLE public.programs TO anon;
@@ -465,6 +344,7 @@ GRANT SELECT ON TABLE public.testimonials TO anon;
 GRANT SELECT ON TABLE public.faqs TO anon;
 GRANT SELECT ON TABLE public.site_settings TO anon;
 
+-- INSERT-ONLY for public lead/enquiry forms:
 GRANT INSERT ON TABLE public.trainer_bookings TO anon;
 GRANT INSERT ON TABLE public.bookings TO anon;
 GRANT INSERT ON TABLE public.contacts TO anon;
@@ -472,48 +352,264 @@ GRANT INSERT ON TABLE public.contact_messages TO anon;
 GRANT INSERT ON TABLE public.leads TO anon;
 GRANT INSERT ON TABLE public.membership_leads TO anon;
 
--- 5. Row Level Security Policies
+-- --------------------------------------------------------------------
+-- 5. Enable Row Level Security (RLS) & Define Granular Policies
+-- --------------------------------------------------------------------
+
+-- === MEMBERSHIPS ===
 ALTER TABLE public.memberships ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Public can view memberships" ON public.memberships;
 DROP POLICY IF EXISTS "Public read memberships" ON public.memberships;
+DROP POLICY IF EXISTS "Allow anon read memberships" ON public.memberships;
+DROP POLICY IF EXISTS "Admins can manage memberships" ON public.memberships;
+DROP POLICY IF EXISTS "Admin manage memberships" ON public.memberships;
+DROP POLICY IF EXISTS "Admin select memberships" ON public.memberships;
 DROP POLICY IF EXISTS "Admin insert memberships" ON public.memberships;
 DROP POLICY IF EXISTS "Admin update memberships" ON public.memberships;
 DROP POLICY IF EXISTS "Admin delete memberships" ON public.memberships;
 
-CREATE POLICY "Public read memberships" ON public.memberships FOR SELECT TO anon, authenticated USING (true);
-CREATE POLICY "Admin insert memberships" ON public.memberships FOR INSERT TO authenticated WITH CHECK (public.is_admin());
-CREATE POLICY "Admin update memberships" ON public.memberships FOR UPDATE TO authenticated USING (public.is_admin()) WITH CHECK (public.is_admin());
-CREATE POLICY "Admin delete memberships" ON public.memberships FOR DELETE TO authenticated USING (public.is_admin());
+-- 1. Public SELECT: Anyone (anonymous visitor or authenticated) can view memberships
+CREATE POLICY "Public read memberships"
+ON public.memberships FOR SELECT
+TO anon, authenticated
+USING (true);
 
+-- 2. Admin INSERT: Authenticated admin can insert new memberships
+CREATE POLICY "Admin insert memberships"
+ON public.memberships FOR INSERT
+TO authenticated
+WITH CHECK (public.is_admin());
+
+-- 3. Admin UPDATE: Authenticated admin can update existing memberships
+CREATE POLICY "Admin update memberships"
+ON public.memberships FOR UPDATE
+TO authenticated
+USING (public.is_admin())
+WITH CHECK (public.is_admin());
+
+-- 4. Admin DELETE: Authenticated admin can delete memberships
+CREATE POLICY "Admin delete memberships"
+ON public.memberships FOR DELETE
+TO authenticated
+USING (public.is_admin());
+
+
+-- === PROGRAMS ===
 ALTER TABLE public.programs ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Public can view programs" ON public.programs;
 DROP POLICY IF EXISTS "Public read programs" ON public.programs;
+DROP POLICY IF EXISTS "Admins can manage programs" ON public.programs;
 DROP POLICY IF EXISTS "Admin manage programs" ON public.programs;
-CREATE POLICY "Public read programs" ON public.programs FOR SELECT TO anon, authenticated USING (true);
-CREATE POLICY "Admin manage programs" ON public.programs FOR ALL TO authenticated USING (public.is_admin()) WITH CHECK (public.is_admin());
+DROP POLICY IF EXISTS "Admin insert programs" ON public.programs;
+DROP POLICY IF EXISTS "Admin update programs" ON public.programs;
+DROP POLICY IF EXISTS "Admin delete programs" ON public.programs;
 
+CREATE POLICY "Public read programs"
+ON public.programs FOR SELECT
+TO anon, authenticated
+USING (true);
+
+CREATE POLICY "Admin insert programs"
+ON public.programs FOR INSERT
+TO authenticated
+WITH CHECK (public.is_admin());
+
+CREATE POLICY "Admin update programs"
+ON public.programs FOR UPDATE
+TO authenticated
+USING (public.is_admin())
+WITH CHECK (public.is_admin());
+
+CREATE POLICY "Admin delete programs"
+ON public.programs FOR DELETE
+TO authenticated
+USING (public.is_admin());
+
+
+-- === TRAINERS ===
 ALTER TABLE public.trainers ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Public can view trainers" ON public.trainers;
 DROP POLICY IF EXISTS "Public read trainers" ON public.trainers;
+DROP POLICY IF EXISTS "Admins can manage trainers" ON public.trainers;
 DROP POLICY IF EXISTS "Admin manage trainers" ON public.trainers;
-CREATE POLICY "Public read trainers" ON public.trainers FOR SELECT TO anon, authenticated USING (true);
-CREATE POLICY "Admin manage trainers" ON public.trainers FOR ALL TO authenticated USING (public.is_admin()) WITH CHECK (public.is_admin());
+DROP POLICY IF EXISTS "Admin insert trainers" ON public.trainers;
+DROP POLICY IF EXISTS "Admin update trainers" ON public.trainers;
+DROP POLICY IF EXISTS "Admin delete trainers" ON public.trainers;
 
+CREATE POLICY "Public read trainers"
+ON public.trainers FOR SELECT
+TO anon, authenticated
+USING (true);
+
+CREATE POLICY "Admin insert trainers"
+ON public.trainers FOR INSERT
+TO authenticated
+WITH CHECK (public.is_admin());
+
+CREATE POLICY "Admin update trainers"
+ON public.trainers FOR UPDATE
+TO authenticated
+USING (public.is_admin())
+WITH CHECK (public.is_admin());
+
+CREATE POLICY "Admin delete trainers"
+ON public.trainers FOR DELETE
+TO authenticated
+USING (public.is_admin());
+
+
+-- === TRAINER BOOKINGS & BOOKINGS ===
 ALTER TABLE public.trainer_bookings ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Anyone can insert booking" ON public.trainer_bookings;
 DROP POLICY IF EXISTS "Public insert trainer booking" ON public.trainer_bookings;
+DROP POLICY IF EXISTS "Admins can manage bookings" ON public.trainer_bookings;
 DROP POLICY IF EXISTS "Admin manage trainer_bookings" ON public.trainer_bookings;
-CREATE POLICY "Public insert trainer booking" ON public.trainer_bookings FOR INSERT TO anon, authenticated WITH CHECK (true);
-CREATE POLICY "Admin manage trainer_bookings" ON public.trainer_bookings FOR ALL TO authenticated USING (public.is_admin()) WITH CHECK (public.is_admin());
+DROP POLICY IF EXISTS "Admin select trainer_bookings" ON public.trainer_bookings;
+DROP POLICY IF EXISTS "Admin update trainer_bookings" ON public.trainer_bookings;
+DROP POLICY IF EXISTS "Admin delete trainer_bookings" ON public.trainer_bookings;
 
+-- Public can submit trial & trainer bookings
+CREATE POLICY "Public insert trainer booking"
+ON public.trainer_bookings FOR INSERT
+TO anon, authenticated
+WITH CHECK (true);
+
+-- Admin can read, update status, and delete bookings
+CREATE POLICY "Admin select trainer_bookings"
+ON public.trainer_bookings FOR SELECT
+TO authenticated
+USING (public.is_admin());
+
+CREATE POLICY "Admin update trainer_bookings"
+ON public.trainer_bookings FOR UPDATE
+TO authenticated
+USING (public.is_admin())
+WITH CHECK (public.is_admin());
+
+CREATE POLICY "Admin delete trainer_bookings"
+ON public.trainer_bookings FOR DELETE
+TO authenticated
+USING (public.is_admin());
+
+-- Bookings table policies
+ALTER TABLE public.bookings ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Public insert bookings" ON public.bookings;
+DROP POLICY IF EXISTS "Admin select bookings" ON public.bookings;
+DROP POLICY IF EXISTS "Admin update bookings" ON public.bookings;
+DROP POLICY IF EXISTS "Admin delete bookings" ON public.bookings;
+
+CREATE POLICY "Public insert bookings" ON public.bookings FOR INSERT TO anon, authenticated WITH CHECK (true);
+CREATE POLICY "Admin select bookings" ON public.bookings FOR SELECT TO authenticated USING (public.is_admin());
+CREATE POLICY "Admin update bookings" ON public.bookings FOR UPDATE TO authenticated USING (public.is_admin()) WITH CHECK (public.is_admin());
+CREATE POLICY "Admin delete bookings" ON public.bookings FOR DELETE TO authenticated USING (public.is_admin());
+
+
+-- === CONTACTS & CONTACT_MESSAGES ===
 ALTER TABLE public.contacts ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Anyone can insert contact" ON public.contacts;
 DROP POLICY IF EXISTS "Public insert contact" ON public.contacts;
-DROP POLICY IF EXISTS "Admin manage contacts" ON public.contacts;
-CREATE POLICY "Public insert contact" ON public.contacts FOR INSERT TO anon, authenticated WITH CHECK (true);
-CREATE POLICY "Admin manage contacts" ON public.contacts FOR ALL TO authenticated USING (public.is_admin()) WITH CHECK (public.is_admin());
+DROP POLICY IF EXISTS "Admins can manage contacts" ON public.contacts;
+DROP POLICY IF EXISTS "Admin select contacts" ON public.contacts;
+DROP POLICY IF EXISTS "Admin update contacts" ON public.contacts;
+DROP POLICY IF EXISTS "Admin delete contacts" ON public.contacts;
 
--- 6. Storage Buckets & Policies
+-- Public can submit enquiry messages
+CREATE POLICY "Public insert contact"
+ON public.contacts FOR INSERT
+TO anon, authenticated
+WITH CHECK (true);
+
+-- Admin can read, mark read/unread, and delete contacts
+CREATE POLICY "Admin select contacts"
+ON public.contacts FOR SELECT
+TO authenticated
+USING (public.is_admin());
+
+CREATE POLICY "Admin update contacts"
+ON public.contacts FOR UPDATE
+TO authenticated
+USING (public.is_admin())
+WITH CHECK (public.is_admin());
+
+CREATE POLICY "Admin delete contacts"
+ON public.contacts FOR DELETE
+TO authenticated
+USING (public.is_admin());
+
+-- Contact messages policies
+ALTER TABLE public.contact_messages ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Public insert contact_messages" ON public.contact_messages;
+DROP POLICY IF EXISTS "Admin select contact_messages" ON public.contact_messages;
+DROP POLICY IF EXISTS "Admin update contact_messages" ON public.contact_messages;
+DROP POLICY IF EXISTS "Admin delete contact_messages" ON public.contact_messages;
+
+CREATE POLICY "Public insert contact_messages" ON public.contact_messages FOR INSERT TO anon, authenticated WITH CHECK (true);
+CREATE POLICY "Admin select contact_messages" ON public.contact_messages FOR SELECT TO authenticated USING (public.is_admin());
+CREATE POLICY "Admin update contact_messages" ON public.contact_messages FOR UPDATE TO authenticated USING (public.is_admin()) WITH CHECK (public.is_admin());
+CREATE POLICY "Admin delete contact_messages" ON public.contact_messages FOR DELETE TO authenticated USING (public.is_admin());
+
+
+-- === LEADS & MEMBERSHIP LEADS ===
+ALTER TABLE public.leads ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Public insert leads" ON public.leads;
+DROP POLICY IF EXISTS "Admin manage leads" ON public.leads;
+CREATE POLICY "Public insert leads" ON public.leads FOR INSERT TO anon, authenticated WITH CHECK (true);
+CREATE POLICY "Admin manage leads" ON public.leads FOR ALL TO authenticated USING (public.is_admin()) WITH CHECK (public.is_admin());
+
+ALTER TABLE public.membership_leads ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Public insert membership_leads" ON public.membership_leads;
+DROP POLICY IF EXISTS "Admin manage membership_leads" ON public.membership_leads;
+CREATE POLICY "Public insert membership_leads" ON public.membership_leads FOR INSERT TO anon, authenticated WITH CHECK (true);
+CREATE POLICY "Admin manage membership_leads" ON public.membership_leads FOR ALL TO authenticated USING (public.is_admin()) WITH CHECK (public.is_admin());
+
+
+-- === CONTENT TABLES (Gallery, Transformations, Testimonials, FAQs, Site Settings) ===
+ALTER TABLE public.gallery ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Public read gallery" ON public.gallery;
+DROP POLICY IF EXISTS "Admin manage gallery" ON public.gallery;
+CREATE POLICY "Public read gallery" ON public.gallery FOR SELECT TO anon, authenticated USING (true);
+CREATE POLICY "Admin manage gallery" ON public.gallery FOR ALL TO authenticated USING (public.is_admin()) WITH CHECK (public.is_admin());
+
+ALTER TABLE public.transformations ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Public read transformations" ON public.transformations;
+DROP POLICY IF EXISTS "Admin manage transformations" ON public.transformations;
+CREATE POLICY "Public read transformations" ON public.transformations FOR SELECT TO anon, authenticated USING (true);
+CREATE POLICY "Admin manage transformations" ON public.transformations FOR ALL TO authenticated USING (public.is_admin()) WITH CHECK (public.is_admin());
+
+ALTER TABLE public.testimonials ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Public read testimonials" ON public.testimonials;
+DROP POLICY IF EXISTS "Admin manage testimonials" ON public.testimonials;
+CREATE POLICY "Public read testimonials" ON public.testimonials FOR SELECT TO anon, authenticated USING (true);
+CREATE POLICY "Admin manage testimonials" ON public.testimonials FOR ALL TO authenticated USING (public.is_admin()) WITH CHECK (public.is_admin());
+
+ALTER TABLE public.faqs ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Public read faqs" ON public.faqs;
+DROP POLICY IF EXISTS "Admin manage faqs" ON public.faqs;
+CREATE POLICY "Public read faqs" ON public.faqs FOR SELECT TO anon, authenticated USING (true);
+CREATE POLICY "Admin manage faqs" ON public.faqs FOR ALL TO authenticated USING (public.is_admin()) WITH CHECK (public.is_admin());
+
+ALTER TABLE public.site_settings ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Public read site_settings" ON public.site_settings;
+DROP POLICY IF EXISTS "Admin manage site_settings" ON public.site_settings;
+CREATE POLICY "Public read site_settings" ON public.site_settings FOR SELECT TO anon, authenticated USING (true);
+CREATE POLICY "Admin manage site_settings" ON public.site_settings FOR ALL TO authenticated USING (public.is_admin()) WITH CHECK (public.is_admin());
+
+-- === ADMINS TABLE ===
+ALTER TABLE public.admins ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Admin select admins" ON public.admins;
+DROP POLICY IF EXISTS "Admin manage admins" ON public.admins;
+CREATE POLICY "Admin select admins" ON public.admins FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Admin manage admins" ON public.admins FOR ALL TO authenticated USING (public.is_admin()) WITH CHECK (public.is_admin());
+
+-- --------------------------------------------------------------------
+-- 6. Storage Buckets (Create public buckets if not existing)
+-- --------------------------------------------------------------------
 INSERT INTO storage.buckets (id, name, public) VALUES ('gym-gallery', 'gym-gallery', true) ON CONFLICT (id) DO NOTHING;
 INSERT INTO storage.buckets (id, name, public) VALUES ('trainer-images', 'trainer-images', true) ON CONFLICT (id) DO NOTHING;
 INSERT INTO storage.buckets (id, name, public) VALUES ('transformation-images', 'transformation-images', true) ON CONFLICT (id) DO NOTHING;
 INSERT INTO storage.buckets (id, name, public) VALUES ('testimonial-images', 'testimonial-images', true) ON CONFLICT (id) DO NOTHING;
 
+-- Storage Policies
 DROP POLICY IF EXISTS "Public read gym-gallery" ON storage.objects;
 DROP POLICY IF EXISTS "Public read trainer-images" ON storage.objects;
 DROP POLICY IF EXISTS "Public read transformation-images" ON storage.objects;
@@ -530,4 +626,3 @@ CREATE POLICY "Public read testimonial-images" ON storage.objects FOR SELECT TO 
 CREATE POLICY "Admin upload objects" ON storage.objects FOR INSERT TO authenticated WITH CHECK (public.is_admin());
 CREATE POLICY "Admin update objects" ON storage.objects FOR UPDATE TO authenticated USING (public.is_admin()) WITH CHECK (public.is_admin());
 CREATE POLICY "Admin delete objects" ON storage.objects FOR DELETE TO authenticated USING (public.is_admin());
-`;

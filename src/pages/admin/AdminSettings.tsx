@@ -50,20 +50,110 @@ export const AdminSettings: React.FC = () => {
     }
   };
 
-  const sqlPermissionsScript = `-- =========================================================
--- D FITNESS GYM: SUPABASE SCHEMA & RLS GRANTS
--- Run this in your Supabase Project -> SQL Editor
--- =========================================================
+  const sqlPermissionsScript = `-- ====================================================================
+-- D FITNESS GYM: COMPLETE SUPABASE PERMISSIONS & RLS REPAIR MIGRATION
+-- Run this script in: Supabase Dashboard -> SQL Editor -> Run
+-- ====================================================================
 
--- 1. Ensure authenticated users have full table privileges
+-- 1. Ensure schema usage privileges
+GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
+
+-- 2. Ensure Admin Table & Helper Authorization Function
+CREATE TABLE IF NOT EXISTS public.admins (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    email TEXT UNIQUE NOT NULL,
+    role TEXT NOT NULL DEFAULT 'super_admin',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Seed Administrator Accounts
+INSERT INTO public.admins (email, role)
+VALUES 
+  ('admin@dfitness.com', 'super_admin'),
+  ('adilshoaibsarotiya@gmail.com', 'super_admin')
+ON CONFLICT (email) DO NOTHING;
+
+-- Create secure SECURITY DEFINER function to check if current user is an admin
+CREATE OR REPLACE FUNCTION public.is_admin()
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+SECURITY DEFINER
+STABLE
+SET search_path = public
+AS $$
+DECLARE
+  curr_email TEXT;
+BEGIN
+  IF auth.role() <> 'authenticated' THEN
+    RETURN FALSE;
+  END IF;
+
+  curr_email := LOWER(COALESCE(auth.jwt() ->> 'email', ''));
+
+  IF EXISTS (
+    SELECT 1 FROM public.admins
+    WHERE LOWER(admins.email) = curr_email
+       OR admins.id = auth.uid()
+  ) THEN
+    RETURN TRUE;
+  END IF;
+
+  IF (auth.jwt() -> 'app_metadata' ->> 'role') IN ('admin', 'super_admin')
+     OR (auth.jwt() -> 'user_metadata' ->> 'role') IN ('admin', 'super_admin') THEN
+    RETURN TRUE;
+  END IF;
+
+  IF curr_email IN ('admin@dfitness.com', 'adilshoaibsarotiya@gmail.com') THEN
+    RETURN TRUE;
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM public.admins) THEN
+    RETURN TRUE;
+  END IF;
+
+  RETURN FALSE;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.is_admin() TO anon, authenticated, service_role;
+
+-- 3. Ensure Table Columns & Structures
+CREATE TABLE IF NOT EXISTS public.memberships (
+    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    name TEXT NOT NULL,
+    price NUMERIC NOT NULL,
+    duration TEXT DEFAULT '1 Month',
+    duration_days INT DEFAULT 30,
+    description TEXT,
+    features JSONB DEFAULT '[]'::jsonb,
+    benefits JSONB DEFAULT '[]'::jsonb,
+    is_featured BOOLEAN DEFAULT false,
+    is_active BOOLEAN DEFAULT true,
+    sort_order INT DEFAULT 1,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE public.memberships ADD COLUMN IF NOT EXISTS duration TEXT DEFAULT '1 Month';
+ALTER TABLE public.memberships ADD COLUMN IF NOT EXISTS duration_days INT DEFAULT 30;
+ALTER TABLE public.memberships ADD COLUMN IF NOT EXISTS description TEXT;
+ALTER TABLE public.memberships ADD COLUMN IF NOT EXISTS features JSONB DEFAULT '[]'::jsonb;
+ALTER TABLE public.memberships ADD COLUMN IF NOT EXISTS benefits JSONB DEFAULT '[]'::jsonb;
+ALTER TABLE public.memberships ADD COLUMN IF NOT EXISTS is_featured BOOLEAN DEFAULT false;
+ALTER TABLE public.memberships ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT true;
+ALTER TABLE public.memberships ADD COLUMN IF NOT EXISTS sort_order INT DEFAULT 1;
+ALTER TABLE public.memberships ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+
+-- 4. Table-Level Grants
 GRANT ALL ON TABLE public.memberships TO authenticated;
 GRANT ALL ON TABLE public.programs TO authenticated;
 GRANT ALL ON TABLE public.trainers TO authenticated;
 GRANT ALL ON TABLE public.trainer_bookings TO authenticated;
 GRANT ALL ON TABLE public.contacts TO authenticated;
 GRANT ALL ON TABLE public.membership_leads TO authenticated;
+GRANT ALL ON TABLE public.admins TO authenticated;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO authenticated, anon;
 
--- 2. Allow public/anon to view active content & submit leads
 GRANT SELECT ON TABLE public.memberships TO anon;
 GRANT SELECT ON TABLE public.programs TO anon;
 GRANT SELECT ON TABLE public.trainers TO anon;
@@ -71,48 +161,54 @@ GRANT INSERT ON TABLE public.membership_leads TO anon;
 GRANT INSERT ON TABLE public.trainer_bookings TO anon;
 GRANT INSERT ON TABLE public.contacts TO anon;
 
--- 3. RLS Policies for Admin Access
+-- 5. RLS Policies for Memberships
 ALTER TABLE public.memberships ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Public can view memberships" ON public.memberships;
-CREATE POLICY "Public can view memberships" ON public.memberships FOR SELECT USING (true);
-
+DROP POLICY IF EXISTS "Public read memberships" ON public.memberships;
 DROP POLICY IF EXISTS "Admins can manage memberships" ON public.memberships;
-CREATE POLICY "Admins can manage memberships" ON public.memberships FOR ALL TO authenticated USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "Admin manage memberships" ON public.memberships;
+DROP POLICY IF EXISTS "Admin insert memberships" ON public.memberships;
+DROP POLICY IF EXISTS "Admin update memberships" ON public.memberships;
+DROP POLICY IF EXISTS "Admin delete memberships" ON public.memberships;
 
+CREATE POLICY "Public read memberships" ON public.memberships FOR SELECT TO anon, authenticated USING (true);
+CREATE POLICY "Admin insert memberships" ON public.memberships FOR INSERT TO authenticated WITH CHECK (public.is_admin());
+CREATE POLICY "Admin update memberships" ON public.memberships FOR UPDATE TO authenticated USING (public.is_admin()) WITH CHECK (public.is_admin());
+CREATE POLICY "Admin delete memberships" ON public.memberships FOR DELETE TO authenticated USING (public.is_admin());
+
+-- 6. RLS Policies for Programs & Trainers
 ALTER TABLE public.programs ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Public can view programs" ON public.programs;
-CREATE POLICY "Public can view programs" ON public.programs FOR SELECT USING (true);
-
+DROP POLICY IF EXISTS "Public read programs" ON public.programs;
 DROP POLICY IF EXISTS "Admins can manage programs" ON public.programs;
-CREATE POLICY "Admins can manage programs" ON public.programs FOR ALL TO authenticated USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "Admin manage programs" ON public.programs;
+CREATE POLICY "Public read programs" ON public.programs FOR SELECT TO anon, authenticated USING (true);
+CREATE POLICY "Admin manage programs" ON public.programs FOR ALL TO authenticated USING (public.is_admin()) WITH CHECK (public.is_admin());
 
 ALTER TABLE public.trainers ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Public can view trainers" ON public.trainers;
-CREATE POLICY "Public can view trainers" ON public.trainers FOR SELECT USING (true);
-
+DROP POLICY IF EXISTS "Public read trainers" ON public.trainers;
 DROP POLICY IF EXISTS "Admins can manage trainers" ON public.trainers;
-CREATE POLICY "Admins can manage trainers" ON public.trainers FOR ALL TO authenticated USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "Admin manage trainers" ON public.trainers;
+CREATE POLICY "Public read trainers" ON public.trainers FOR SELECT TO anon, authenticated USING (true);
+CREATE POLICY "Admin manage trainers" ON public.trainers FOR ALL TO authenticated USING (public.is_admin()) WITH CHECK (public.is_admin());
 
+-- 7. RLS Policies for Bookings & Contacts
 ALTER TABLE public.trainer_bookings ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Anyone can insert booking" ON public.trainer_bookings;
-CREATE POLICY "Anyone can insert booking" ON public.trainer_bookings FOR INSERT WITH CHECK (true);
-
+DROP POLICY IF EXISTS "Public insert trainer booking" ON public.trainer_bookings;
 DROP POLICY IF EXISTS "Admins can manage bookings" ON public.trainer_bookings;
-CREATE POLICY "Admins can manage bookings" ON public.trainer_bookings FOR ALL TO authenticated USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "Admin manage trainer_bookings" ON public.trainer_bookings;
+CREATE POLICY "Public insert trainer booking" ON public.trainer_bookings FOR INSERT TO anon, authenticated WITH CHECK (true);
+CREATE POLICY "Admin manage trainer_bookings" ON public.trainer_bookings FOR ALL TO authenticated USING (public.is_admin()) WITH CHECK (public.is_admin());
 
 ALTER TABLE public.contacts ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Anyone can insert contact" ON public.contacts;
-CREATE POLICY "Anyone can insert contact" ON public.contacts FOR INSERT WITH CHECK (true);
-
+DROP POLICY IF EXISTS "Public insert contact" ON public.contacts;
 DROP POLICY IF EXISTS "Admins can manage contacts" ON public.contacts;
-CREATE POLICY "Admins can manage contacts" ON public.contacts FOR ALL TO authenticated USING (true) WITH CHECK (true);
-
-ALTER TABLE public.membership_leads ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "Anyone can insert membership lead" ON public.membership_leads;
-CREATE POLICY "Anyone can insert membership lead" ON public.membership_leads FOR INSERT WITH CHECK (true);
-
-DROP POLICY IF EXISTS "Admins can view leads" ON public.membership_leads;
-CREATE POLICY "Admins can view leads" ON public.membership_leads FOR ALL TO authenticated USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "Admin manage contacts" ON public.contacts;
+CREATE POLICY "Public insert contact" ON public.contacts FOR INSERT TO anon, authenticated WITH CHECK (true);
+CREATE POLICY "Admin manage contacts" ON public.contacts FOR ALL TO authenticated USING (public.is_admin()) WITH CHECK (public.is_admin());
 `;
 
   const copySqlToClipboard = () => {
