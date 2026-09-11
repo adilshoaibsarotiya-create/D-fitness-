@@ -1,0 +1,129 @@
+@import "tailwindcss";
+
+@theme {
+  --font-heading: "Space Grotesk", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-body: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-display: "Bebas Neue", sans-serif;
+
+  --color-dark-bg: #050505;
+  --color-dark-secondary: #0E0E0E;
+  --color-dark-card: #151515;
+  --color-neon-yellow: #FFD400;
+  --color-accent-yellow: #FFE600;
+  --color-secondary-text: #BDBDBD;
+  --color-gym-success: #00FF84;
+  --color-gym-danger: #FF4C61;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  font-family: var(--font-body);
+  background-color: #050505;
+  color: #ffffff;
+  overflow-x: hidden;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-heading);
+  letter-spacing: -0.02em;
+}
+
+.font-display {
+  font-family: var(--font-display);
+  letter-spacing: 0.04em;
+}
+
+.font-heading {
+  font-family: var(--font-heading);
+}
+
+.font-body {
+  font-family: var(--font-body);
+}
+
+/* Glassmorphism & Borders */
+.glass-panel {
+  background: rgba(21, 21, 21, 0.75);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 212, 0, 0.12);
+}
+
+.glass-panel:hover {
+  border-color: rgba(255, 212, 0, 0.35);
+}
+
+.glass-card {
+  background: #151515;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.glass-card:hover {
+  border-color: rgba(255, 212, 0, 0.4);
+  box-shadow: 0 10px 30px -10px rgba(255, 212, 0, 0.15);
+  transform: translateY(-3px);
+}
+
+/* Glow effects */
+.yellow-glow {
+  box-shadow: 0 0 35px -5px rgba(255, 212, 0, 0.25);
+}
+
+.text-glow {
+  text-shadow: 0 0 20px rgba(255, 212, 0, 0.4);
+}
+
+/* Shimmer / Shine on buttons */
+.button-shine {
+  position: relative;
+  overflow: hidden;
+}
+
+.button-shine::after {
+  content: '';
+  position: absolute;
+  top: -50%;
+  left: -60%;
+  width: 20%;
+  height: 200%;
+  background: linear-gradient(
+    60deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.35) 50%,
+    transparent 100%
+  );
+  transform: rotate(25deg);
+  transition: all 0.6s ease;
+}
+
+.button-shine:hover::after {
+  left: 140%;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #050505;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #252525;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #FFD400;
+}
+
+/* Subtle background noise texture */
+.bg-noise {
+  background-image: radial-gradient(rgba(255, 212, 0, 0.04) 1px, transparent 0);
+  background-size: 28px 28px;
+}
